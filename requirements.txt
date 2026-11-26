@@ -1,0 +1,20 @@
+# DrowsyNet.ipynb installs these automatically in its first cell.
+# CPU-only PyTorch is enough:  pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+torch
+torchvision
+timm
+mediapipe
+opencv-python
+numpy
+pandas
+scikit-learn
+xgboost
+lightgbm
+catboost
+matplotlib
+seaborn
+tqdm
+kagglehub
+streamlit
+plotly
+jupyter
