@@ -1,0 +1,38 @@
+{
+  "features": [
+    "ear_left",
+    "ear_right",
+    "mar",
+    "mouth_open",
+    "head_pitch",
+    "head_yaw",
+    "head_roll",
+    "eye_blink_left",
+    "eye_blink_right",
+    "eye_squint_left",
+    "eye_squint_right",
+    "gaze_down_left",
+    "gaze_down_right",
+    "jaw_open"
+  ],
+  "img_size": 64,
+  "labels": [
+    "Non Drowsy",
+    "Drowsy"
+  ],
+  "results": {
+    "Random Forest": {
+      "Accuracy": 0.6972,
+      "Precision": 0.6664,
+      "Recall": 0.7281,
+      "F1-Score": 0.6959
+    },
+    "KNN": {
+      "Accuracy": 0.7427,
+      "Precision": 0.6942,
+      "Recall": 0.8205,
+      "F1-Score": 0.7521
+    }
+  },
+  "best_model": "KNN"
+}

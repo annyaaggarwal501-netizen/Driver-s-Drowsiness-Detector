@@ -1,46 +1,54 @@
-# DrowsyNet: Driver Drowsiness Detection with Machine Learning
+# Driver Drowsiness Detection
 
-The whole project is one Google Colab notebook: **[`DrowsyNet_ML.ipynb`](DrowsyNet_ML.ipynb)**.
+This project detects whether a driver is **Drowsy** or **Alert** from their face. It uses **OpenCV** (webcam),
+**MediaPipe** (face landmarks), **NumPy** (eye and mouth measurements), **scikit-learn** (Random Forest, KNN) and
+**PyTorch** (CNN), and runs live in a **Streamlit** app.
 
-It classifies each video frame of a driver's face as **Drowsy** or **Non Drowsy** from facial measurements (eye
-aspect ratio, mouth aspect ratio, head pose, eye blink / squint / gaze, jaw opening). It compares 4 models on
-**drivers never seen during training**, picks the best one automatically, saves it, and provides a
-`predict_drowsiness()` function.
+## Files
 
-## Results (6 unseen test drivers)
+| File | What it is |
+|---|---|
+| `DrowsyNet_3Models.ipynb` | Main notebook (Google Colab): Random Forest vs KNN vs CNN, trained and compared |
+| `app.py` | Streamlit app: live webcam, photo check, model comparison |
+| `models/` | Trained models from the notebook (`rf_model.pkl`, `knn_model.pkl`, `cnn_model.pt`, `model_info.json`) |
+| `data/driver_drowsiness_features.csv` | Facial measurements of 41,793 face images (28 drivers) |
+| `DrowsyNet_ML.ipynb` | Extended version: Logistic Regression, Random Forest, XGBoost, LSTM with personal calibration |
 
-| Model | Accuracy | Precision | Recall | F1-Score | ROC-AUC |
-|---|---|---|---|---|---|
-| Logistic Regression | 57.90 % | 79.44 % | 34.78 % | 48.38 % | 0.715 |
-| Random Forest | 88.80 % | 96.82 % | 82.98 % | 89.37 % | 0.961 |
-| **XGBoost (best)** | **90.34 %** | **97.99 %** | **84.69 %** | **90.86 %** | **0.956** |
-| LSTM (30-frame sequences) | 82.09 % | 90.55 % | 76.39 % | 82.87 % | 0.862 |
+## Results (6 drivers never seen in training)
 
-## How to run (Google Colab)
+| Model | Accuracy | Precision | Recall | F1-Score |
+|---|---|---|---|---|
+| Random Forest | 69.14 % | 66.14 % | 72.01 % | 68.95 % |
+| **KNN (best)** | **74.27 %** | 69.42 % | 82.05 % | **75.21 %** |
+| CNN | 58.42 % | 53.68 % | 91.93 % | 67.78 % |
 
-1. Open `DrowsyNet_ML.ipynb` in Colab (File → Open notebook → GitHub → paste this repository's URL).
-2. Download [`data/driver_drowsiness_features.csv`](data/driver_drowsiness_features.csv) from this repository.
-3. Runtime → Run all. When the file picker appears, upload the CSV.
-4. The best model, preprocessor and label encoder are saved and downloaded at the end. Training takes a few minutes.
+The data is split **by driver**, so no driver appears in both training and test. A random split would put
+near-identical frames of the same person in both sets and give fake ~99 % accuracy.
 
-## Dataset
+## Run the notebook (Google Colab)
 
-`data/driver_drowsiness_features.csv` has 41,793 rows (one per frame) from 28 drivers. The measurements were
-extracted with Google MediaPipe Face Landmarker from the face images of the Kaggle
-[Driver Drowsiness Dataset (DDD)](https://www.kaggle.com/datasets/ismailnasri20/driver-drowsiness-dataset-ddd),
-which comes from the UTA Real-Life Drowsiness Dataset videos.
+Open `DrowsyNet_3Models.ipynb` in Colab, choose Runtime → Change runtime type → **T4 GPU**, then **Run all**.
+The CSV is read straight from this repository, and the face images are downloaded from Kaggle with `kagglehub`.
 
-Columns: `image`, `subject_id`, `frame`, `label` (Drowsy / Non Drowsy) and 25 measurements: EAR left/right, MAR,
-mouth opening, head pitch/yaw/roll, eye blink/squint/wide, gaze down/up, jaw open, mouth close, brow movements,
-face scale, image blur and brightness.
+## Run the live app (on your laptop, needs a webcam)
 
-## Key methods
+```bash
+pip install -r requirements.txt
+streamlit run app.py
+```
 
-- **No data leakage.** The split is by driver (`GroupShuffleSplit` on `subject_id`), so no driver appears in both
-  training and test. Time-based features and LSTM sequences never cross drivers or recordings.
-- **Feature engineering.** Derived eye features, rolling PERCLOS-style features over the last 30 frames, and
-  **personal calibration**: z-scores against each driver's own alert baseline. Calibration is the largest single
-  improvement, because differences between people are bigger than the drowsy/alert difference.
-- **Best-model rule.** F1 first, then recall for Drowsy, then cross-validated F1 across drivers, then accuracy.
+It opens at http://localhost:8501. On the **Live Webcam** page:
+1. Choose a model in the sidebar (Random Forest, KNN or CNN). You can switch while the camera is on.
+2. Press **Start camera**.
+3. The app draws eye/mouth outlines and shows EAR, MAR and the drowsiness probability. If the model says Drowsy for
+   1.5 seconds without a break, a **WAKE UP** alarm appears with a beep.
 
-Research prototype, not a certified driver-safety device.
+## How it works
+
+1. **OpenCV** reads a webcam frame.
+2. **MediaPipe Face Landmarker** finds 478 face points, eye-blink / squint / gaze / jaw scores and the head pose.
+3. **NumPy** computes the eye aspect ratio, EAR = (‖p2−p6‖ + ‖p3−p5‖) / (2‖p1−p4‖), and the mouth aspect ratio, MAR.
+4. **Random Forest / KNN** use 14 such measurements. The **CNN** uses the 64×64 grayscale face image.
+5. The prediction is averaged over about 1 second. Staying drowsy for 1.5 s triggers the alarm.
+
+Data source: Kaggle [Driver Drowsiness Dataset (DDD)](https://www.kaggle.com/datasets/ismailnasri20/driver-drowsiness-dataset-ddd).

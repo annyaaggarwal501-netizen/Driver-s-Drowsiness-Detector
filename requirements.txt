@@ -1,9 +1,16 @@
-# DrowsyNet_ML.ipynb (Google Colab already has these; the notebook installs anything missing)
-pandas
+# Streamlit app (app.py) — run on your laptop:  streamlit run app.py
+streamlit
+opencv-python
+mediapipe
+torch
+scikit-learn
+joblib
 numpy
+pandas
+
+# Notebooks (Google Colab already has most of these)
 matplotlib
 seaborn
-scikit-learn
+kagglehub
 xgboost
 tensorflow
-joblib
