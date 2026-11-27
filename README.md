@@ -1,49 +1,46 @@
-# DrowsyNet: driver drowsiness detection
+# DrowsyNet: Driver Drowsiness Detection with Machine Learning
 
-The whole project lives in one notebook: **[`DrowsyNet.ipynb`](DrowsyNet.ipynb)**. It downloads the data, extracts
-facial features, trains and compares 30+ models on people never seen in training, picks the best model with a
-written rule, and writes and launches a **Streamlit** app that uses only that model.
+The whole project is one Google Colab notebook: **[`DrowsyNet_ML.ipynb`](DrowsyNet_ML.ipynb)**.
 
-App pages: **live webcam** (with alarm), **upload video**, **upload photo**, **model comparison**, **how it works**.
+It classifies each video frame of a driver's face as **Drowsy** or **Non Drowsy** from facial measurements (eye
+aspect ratio, mouth aspect ratio, head pose, eye blink / squint / gaze, jaw opening). It compares 4 models on
+**drivers never seen during training**, picks the best one automatically, saves it, and provides a
+`predict_drowsiness()` function.
 
-## Run it
+## Results (6 unseen test drivers)
 
-```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install jupyter
-jupyter notebook DrowsyNet.ipynb      # then: Run All
-```
+| Model | Accuracy | Precision | Recall | F1-Score | ROC-AUC |
+|---|---|---|---|---|---|
+| Logistic Regression | 57.90 % | 79.44 % | 34.78 % | 48.38 % | 0.715 |
+| Random Forest | 88.80 % | 96.82 % | 82.98 % | 89.37 % | 0.961 |
+| **XGBoost (best)** | **90.34 %** | **97.99 %** | **84.69 %** | **90.86 %** | **0.956** |
+| LSTM (30-frame sequences) | 82.09 % | 90.55 % | 76.39 % | 82.87 % | 0.862 |
 
-The first cell installs the remaining packages. Expensive steps are cached in `data/`, `models/` and `reports/`, so
-a re-run continues where it stopped. The last section starts the app at http://localhost:8501. You can also start
-it directly once the notebook has run:
+## How to run (Google Colab)
 
-```powershell
-streamlit run app.py
-```
+1. Open `DrowsyNet_ML.ipynb` in Colab (File → Open notebook → GitHub → paste this repository's URL).
+2. Download [`data/driver_drowsiness_features.csv`](data/driver_drowsiness_features.csv) from this repository.
+3. Runtime → Run all. When the file picker appears, upload the CSV.
+4. The best model, preprocessor and label encoder are saved and downloaded at the end. Training takes a few minutes.
 
-`drowsy_core.py` (the shared pipeline) and `app.py` (the Streamlit app) are **written by the notebook** with
-`%%writefile`. Edit the notebook, not these files.
+## Dataset
 
-## What is new compared with the reference paper
+`data/driver_drowsiness_features.csv` has 41,793 rows (one per frame) from 28 drivers. The measurements were
+extracted with Google MediaPipe Face Landmarker from the face images of the Kaggle
+[Driver Drowsiness Dataset (DDD)](https://www.kaggle.com/datasets/ismailnasri20/driver-drowsiness-dataset-ddd),
+which comes from the UTA Real-Life Drowsiness Dataset videos.
 
-Reference: C. Yashwanth & J. S. Kirar, *Driver's Drowsiness Detection*, IEEE TENCON 2019.
+Columns: `image`, `subject_id`, `frame`, `label` (Drowsy / Non Drowsy) and 25 measurements: EAR left/right, MAR,
+mouth opening, head pitch/yaw/roll, eye blink/squint/wide, gaze down/up, jaw open, mouth close, brow movements,
+face scale, image blur and brightness.
 
-| Aspect | Reference paper | DrowsyNet |
-|---|---|---|
-| Landmarks | dlib, 68 points | MediaPipe: 478 points, 52 blendshapes, head pose |
-| Time | single frames | personal calibration, PERCLOS, blinks, long closures, yawns, nods |
-| Evaluation | same person in training and testing | unseen test participants + 5-fold group CV |
-| Models | 4 classifiers | paper baseline, 14 classic ML, 8 CNN/ViT, stacking, late fusion (+ temporal models with video data) |
-| Robustness | blurred frames broke 3 of 10 subjects | quality gate, low-light enhancement, CNN branch |
-| Score | product of averages, unbounded | bounded 0–1 score mapped to KSS 1–9 |
-| Explainability | none | reasons, Grad-CAM, feature importance |
-| Product | offline experiment | Streamlit app: webcam, video, photo |
+## Key methods
 
-## Data
-
-- [Driver Drowsiness Dataset (DDD)](https://www.kaggle.com/datasets/ismailnasri20/driver-drowsiness-dataset-ddd): 41,793 face images from 28 participants, downloaded automatically with `kagglehub`.
-- Optional: [UTA-RLDD](https://sites.google.com/view/utarldd/home) videos in `data/raw/rldd/` with `USE_RLDD = True`, to train the window (Group B) and sequence (Group D) models.
+- **No data leakage.** The split is by driver (`GroupShuffleSplit` on `subject_id`), so no driver appears in both
+  training and test. Time-based features and LSTM sequences never cross drivers or recordings.
+- **Feature engineering.** Derived eye features, rolling PERCLOS-style features over the last 30 frames, and
+  **personal calibration**: z-scores against each driver's own alert baseline. Calibration is the largest single
+  improvement, because differences between people are bigger than the drowsy/alert difference.
+- **Best-model rule.** F1 first, then recall for Drowsy, then cross-validated F1 across drivers, then accuracy.
 
 Research prototype, not a certified driver-safety device.
