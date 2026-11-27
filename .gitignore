@@ -30,3 +30,9 @@ reports/
 Thumbs.db
 .vscode/
 .idea/
+
+# Model files the notebook saves next to itself (the app uses models/ instead)
+/rf_model.pkl
+/knn_model.pkl
+/cnn_model.pt
+/model_info.json
