@@ -205,6 +205,31 @@ def beep_html():
     return base64.b64encode(buf.getvalue()).decode()
 
 
+@st.cache_data
+def alarm_loop_b64():
+    """One 1-second cycle (0.4 s beep + 0.6 s silence); played with `loop`, it beeps every second."""
+    sr = 22050
+    t = np.linspace(0, 0.4, int(sr * 0.4), False)
+    tone = np.sign(np.sin(2 * np.pi * 880 * t)) * 0.3
+    cycle = np.concatenate([tone, np.zeros(int(sr * 0.6))])
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1); wf.setsampwidth(2); wf.setframerate(sr); wf.writeframes((cycle * 32767).astype(np.int16).tobytes())
+    return base64.b64encode(buf.getvalue()).decode()
+
+
+def set_alarm_sound(box, on, state):
+    """Keep a looping alarm sound on the page exactly while `on` is True.
+    The <audio> element is created when the alarm starts (autoplay starts it) and removed when it stops,
+    so every new alarm creates a fresh element and plays again."""
+    if on and not state["playing"]:
+        box.markdown(f'<audio autoplay loop src="data:audio/wav;base64,{alarm_loop_b64()}"></audio>', unsafe_allow_html=True)
+        state["playing"] = True
+    elif not on and state["playing"]:
+        box.empty()
+        state["playing"] = False
+
+
 # ----------------------------------------------------------------------------- page layout
 st.set_page_config(page_title="Driver Drowsiness Detection", page_icon="😴", layout="wide")
 st.markdown("""<style>
@@ -333,13 +358,14 @@ if page == "Live Camera (browser)":
         closed_box, drowsy_box = m3.empty(), m4.empty()
     if not ctx.state.playing:
         status_box.info("Press **START** under the video box to begin.")
-    last_beep = 0.0
+    snd = {"playing": False}
     while ctx.state.playing:
         with det.lock:
             info = dict(det.info)
         if not info.get("face"):
             status_box.markdown('<div class="status" style="background:#64748b">No face detected</div>', unsafe_allow_html=True)
             alarm_box.empty()
+            set_alarm_sound(sound_box, False, snd)
         else:
             label, bg = (LABELS[1], "#dc2626") if info["drowsy"] else (LABELS[0], "#16a34a")
             status_box.markdown(f'<div class="status" style="background:{bg}">{label}</div>', unsafe_allow_html=True)
@@ -350,12 +376,9 @@ if page == "Live Camera (browser)":
             drowsy_box.metric("Drowsy for", f"{info['drowsy_for']:.1f} s")
             if info["alarm"]:
                 alarm_box.markdown('<div class="alarm">⚠ WAKE UP! Drowsiness detected</div>', unsafe_allow_html=True)
-                if sound and time.time() - last_beep > 1.5:
-                    last_beep = time.time()
-                    sound_box.markdown(f'<audio autoplay src="data:audio/wav;base64,{beep_html()}"></audio><!--{last_beep}-->',
-                                       unsafe_allow_html=True)
             else:
                 alarm_box.empty()
+            set_alarm_sound(sound_box, info["alarm"] and sound, snd)
         time.sleep(0.25)
 
 
@@ -388,7 +411,7 @@ elif page == "Laptop Camera (local only)":
         else:
             probs, history = deque(maxlen=SMOOTH_FRAMES), deque(maxlen=150)
             drowsy_since = closed_since = None
-            last, last_beep, t_start = 0.0, 0.0, time.time()
+            last, t_start, snd = 0.0, time.time(), {"playing": False}
             try:
                 while True:
                     ok, frame = cap.read()
@@ -405,6 +428,7 @@ elif page == "Laptop Camera (local only)":
                         frame_box.image(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), channels="RGB", width="stretch")
                         status_box.markdown('<div class="status" style="background:#64748b">No face detected</div>', unsafe_allow_html=True)
                         alarm_box.empty()
+                        set_alarm_sound(sound_box, False, snd)
                         continue
                     feats = res["feats"]
                     probs.append(predict(model_name, feats, res["crop"]))
@@ -432,12 +456,9 @@ elif page == "Laptop Camera (local only)":
                     drowsy_box.metric("Drowsy for", f"{drowsy_for:.1f} s")
                     if alarm:
                         alarm_box.markdown('<div class="alarm">⚠ WAKE UP! Drowsiness detected</div>', unsafe_allow_html=True)
-                        if sound and now - last_beep > 1.5:
-                            last_beep = now
-                            sound_box.markdown(f'<audio autoplay src="data:audio/wav;base64,{beep_html()}"></audio><!--{now}-->',
-                                               unsafe_allow_html=True)
                     else:
                         alarm_box.empty()
+                    set_alarm_sound(sound_box, alarm and sound, snd)
                     history.append({"time (s)": round(now - t_start, 1), "drowsiness": p})
                     if len(history) % 5 == 0:
                         chart_box.line_chart(pd.DataFrame(history).set_index("time (s)"), height=160)
