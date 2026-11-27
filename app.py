@@ -12,6 +12,7 @@ The trained models come from DrowsyNet_3Models.ipynb and live in the models/ fol
 import base64
 import io
 import json
+import os
 import threading
 import time
 import urllib.request
@@ -47,9 +48,12 @@ BLENDSHAPES = {"eye_blink_left": "eyeBlinkLeft", "eye_blink_right": "eyeBlinkRig
                "eye_squint_left": "eyeSquintLeft", "eye_squint_right": "eyeSquintRight",
                "gaze_down_left": "eyeLookDownLeft", "gaze_down_right": "eyeLookDownRight", "jaw_open": "jawOpen"}
 
-ALARM_SECONDS = 1.5          # drowsy this long without a break -> alarm
-SMOOTH_FRAMES = 10           # average the model output over the last 10 frames (~1 s)
+ALARM_SECONDS = 1.5          # drowsy (or eyes closed) this long without a break -> alarm
+SMOOTH_FRAMES = 10           # laptop camera: average the model output over the last 10 frames (~1 s)
+SMOOTH_SECONDS = 1.0         # browser camera: average over the last 1 s, whatever the frame rate
 TARGET_FPS = 10
+# Running on Streamlit Community Cloud? (the server has no camera, so the laptop-camera page is hidden there)
+ONLINE = Path("/mount/src").exists() or os.environ.get("DROWSY_ONLINE") == "1"
 
 
 # ----------------------------------------------------------------------------- loading (cached once)
@@ -213,7 +217,10 @@ st.markdown("""<style>
 results = pd.DataFrame(INFO["results"]).T
 with st.sidebar:
     st.title("😴 Drowsiness Detector")
-    page = st.radio("Page", ["Live Camera (browser)", "Laptop Camera (local only)", "Upload Photo", "Model Comparison"])
+    pages = ["Live Camera (browser)", "Upload Photo", "Model Comparison"]
+    if not ONLINE:                                           # only when app.py runs on your own laptop
+        pages.insert(1, "Laptop Camera (local only)")
+    page = st.radio("Page", pages)
     st.divider()
     names = list(results.index)
     model_name = st.selectbox("Model", names, index=names.index(INFO["best_model"]),
@@ -221,6 +228,8 @@ with st.sidebar:
     r = results.loc[model_name]
     st.caption(f"Test accuracy {r['Accuracy']:.1%} · F1 {r['F1-Score']:.1%} (on drivers never seen in training)")
     sound = st.toggle("Alarm sound", value=True)
+    if st.button("🔔 Test alarm sound", help="Plays the beep once. Click it before starting so the browser allows sound."):
+        st.audio(base64.b64decode(beep_html()), format="audio/wav", autoplay=True)
 
 
 # ----------------------------------------------------------------------------- Live camera in the browser (online)
@@ -240,7 +249,7 @@ class BrowserDetector:
     def __init__(self):
         self.lock = threading.Lock()
         self.model_name = INFO["best_model"]
-        self.probs = deque(maxlen=SMOOTH_FRAMES)
+        self.probs = deque()                                 # (time, probability) pairs of the last SMOOTH_SECONDS
         self.drowsy_since = self.closed_since = None
         self.info = {"face": False}
 
@@ -259,14 +268,19 @@ class BrowserDetector:
         with self.lock:
             name = self.model_name
         feats = res["feats"]
-        self.probs.append(predict(name, feats, res["crop"]))
-        p = float(np.mean(self.probs))
+        self.probs.append((now, predict(name, feats, res["crop"])))
+        while self.probs and now - self.probs[0][0] > SMOOTH_SECONDS:
+            self.probs.popleft()
+        p = float(np.mean([q for _, q in self.probs]))
         drowsy = p >= 0.5
         self.drowsy_since = (self.drowsy_since or now) if drowsy else None
         eyes_closed = (feats["eye_blink_left"] + feats["eye_blink_right"]) / 2 > 0.55
         self.closed_since = (self.closed_since or now) if eyes_closed else None
         drowsy_for = now - self.drowsy_since if self.drowsy_since else 0.0
-        alarm = drowsy_for >= ALARM_SECONDS
+        closed_for = now - self.closed_since if self.closed_since else 0.0
+        # Alarm when the model says Drowsy for 1.5 s, or when the eyes stay closed for 1.5 s (a micro-sleep;
+        # a normal blink lasts only 0.1–0.4 s).
+        alarm = drowsy_for >= ALARM_SECONDS or closed_for >= ALARM_SECONDS
         color = (40, 40, 230) if drowsy else (60, 200, 60)
         vis = draw(img, res["pts"], color)
         cv2.rectangle(vis, (0, 0), (vis.shape[1], 40), (0, 0, 0), -1)
@@ -276,7 +290,7 @@ class BrowserDetector:
             cv2.putText(vis, "WAKE UP!", (vis.shape[1] // 2 - 110, vis.shape[0] - 30), cv2.FONT_HERSHEY_DUPLEX, 1.5, (0, 0, 255), 3, cv2.LINE_AA)
         with self.lock:
             self.info = {"face": True, "p": p, "drowsy": drowsy, "alarm": alarm, "drowsy_for": drowsy_for,
-                         "closed_for": (now - self.closed_since) if self.closed_since else 0.0,
+                         "closed_for": closed_for,
                          "ear": (feats["ear_left"] + feats["ear_right"]) / 2, "mar": feats["mar"]}
         return av.VideoFrame.from_ndarray(vis, format="bgr24")
 
@@ -285,8 +299,20 @@ if page == "Live Camera (browser)":
     from streamlit_webrtc import WebRtcMode, webrtc_streamer
 
     st.header("Live Camera")
-    st.caption("Uses **your browser's camera**, so it also works when the app runs online. Press **START** and allow "
-               "camera access. Frames are analysed on the server and are not saved.")
+    st.caption("Uses **your browser's camera** (your laptop or phone camera). Press **START** and allow camera access. "
+               "Frames are analysed on the server and are not saved.")
+    with st.expander("How to use the camera and the alarm"):
+        st.markdown(f"""
+1. Click **🔔 Test alarm sound** in the sidebar once: you should hear a beep. (Browsers only play sound after you
+   click on the page, and your volume must be on.)
+2. Press **START** under the video box and click **Allow** when the browser asks for the camera.
+   If the wrong camera opens, use **SELECT DEVICE**.
+3. Sit facing the camera with your face well lit. Green outlines around your eyes and mouth mean the face is found.
+4. To test the alarm, **close your eyes for about 2 seconds** (or look drowsy / yawn). The alarm fires when your eyes
+   stay closed for {ALARM_SECONDS:.1f} s or the model says *Drowsy* for {ALARM_SECONDS:.1f} s without a break: the video gets a
+   red border with **WAKE UP!**, a red banner appears and the beep plays (if **Alarm sound** is on).
+5. Press **STOP** to end. The online server is slower than a laptop, so the video can lag a little.
+""")
     if "browser_detector" not in st.session_state:
         st.session_state.browser_detector = BrowserDetector()
     det = st.session_state.browser_detector
@@ -388,7 +414,7 @@ elif page == "Laptop Camera (local only)":
                     eyes_closed = (feats["eye_blink_left"] + feats["eye_blink_right"]) / 2 > 0.55
                     closed_since = (closed_since or now) if eyes_closed else None
                     drowsy_for = now - drowsy_since if drowsy_since else 0.0
-                    alarm = drowsy_for >= ALARM_SECONDS
+                    alarm = drowsy_for >= ALARM_SECONDS or (closed_since is not None and now - closed_since >= ALARM_SECONDS)
 
                     color = (40, 40, 230) if drowsy else (60, 200, 60)
                     vis = draw(frame, res["pts"], color)
