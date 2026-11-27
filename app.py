@@ -1,7 +1,10 @@
 """Driver Drowsiness Detection: live Streamlit app (Random Forest / KNN / CNN).
 
-Run on your laptop (needs a webcam):
-    pip install streamlit mediapipe opencv-python torch scikit-learn joblib numpy pandas
+Online version (branch `online-deploy`): the "Live Camera (browser)" page streams the viewer's own
+browser camera to the app with streamlit-webrtc, so it works when deployed on Streamlit Community Cloud.
+The "Laptop Camera" page still uses OpenCV on the machine running the app (local runs only).
+
+    pip install -r requirements.txt
     streamlit run app.py
 
 The trained models come from DrowsyNet_3Models.ipynb and live in the models/ folder.
@@ -9,6 +12,7 @@ The trained models come from DrowsyNet_3Models.ipynb and live in the models/ fol
 import base64
 import io
 import json
+import threading
 import time
 import urllib.request
 import wave
@@ -90,6 +94,14 @@ def load_everything():
 mp, LANDMARKER_MODEL, MODEL_OBJECTS = load_everything()
 
 
+@st.cache_resource
+def detect_lock():
+    return threading.Lock()
+
+
+DETECT_LOCK = detect_lock()
+
+
 # ----------------------------------------------------------------------------- face measurements (OpenCV + MediaPipe + NumPy)
 _clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
 
@@ -108,7 +120,8 @@ def detect_face(bgr):
     for pad in (0, int(0.35 * max(h, w))):                 # retry with a border for tight face photos
         img = cv2.copyMakeBorder(bgr, pad, pad, pad, pad, cv2.BORDER_CONSTANT) if pad else bgr
         rgb = np.ascontiguousarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
-        res = LANDMARKER_MODEL.detect(mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb))
+        with DETECT_LOCK:                                    # one detection at a time (several viewers online)
+            res = LANDMARKER_MODEL.detect(mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb))
         if res.face_landmarks:
             ph, pw = img.shape[:2]
             pts = np.array([[p.x * pw - pad, p.y * ph - pad] for p in res.face_landmarks[0]], np.float32)
@@ -215,7 +228,7 @@ st.markdown("""<style>
 results = pd.DataFrame(INFO["results"]).T
 with st.sidebar:
     st.title("😴 Drowsiness Detector")
-    page = st.radio("Page", ["Live Webcam", "Upload Photo", "Model Comparison"])
+    page = st.radio("Page", ["Live Camera (browser)", "Laptop Camera (local only)", "Upload Photo", "Model Comparison"])
     st.divider()
     names = list(results.index)
     model_name = st.selectbox("Model", names, index=names.index(INFO["best_model"]),
@@ -225,9 +238,120 @@ with st.sidebar:
     sound = st.toggle("Alarm sound", value=True)
 
 
-# ----------------------------------------------------------------------------- Live webcam
-if page == "Live Webcam":
-    st.header("Live Webcam")
+# ----------------------------------------------------------------------------- Live camera in the browser (online)
+def ice_servers():
+    """STUN by default; a TURN server can be added in Streamlit secrets as ICE_SERVERS (for strict networks)."""
+    try:
+        if "ICE_SERVERS" in st.secrets:
+            return json.loads(st.secrets["ICE_SERVERS"]) if isinstance(st.secrets["ICE_SERVERS"], str) else list(st.secrets["ICE_SERVERS"])
+    except Exception:
+        pass
+    return [{"urls": ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"]}]
+
+
+class BrowserDetector:
+    """Runs on every frame the browser sends; keeps the smoothing / alarm state for one viewer."""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.model_name = INFO["best_model"]
+        self.probs = deque(maxlen=SMOOTH_FRAMES)
+        self.drowsy_since = self.closed_since = None
+        self.info = {"face": False}
+
+    def callback(self, frame):
+        import av
+        img = cv2.flip(frame.to_ndarray(format="bgr24"), 1)
+        now = time.time()
+        res = analyse(img)
+        if res is None:
+            self.probs.clear()
+            self.drowsy_since = self.closed_since = None
+            cv2.putText(img, "No face detected", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (60, 60, 240), 2, cv2.LINE_AA)
+            with self.lock:
+                self.info = {"face": False}
+            return av.VideoFrame.from_ndarray(img, format="bgr24")
+        with self.lock:
+            name = self.model_name
+        feats = res["feats"]
+        self.probs.append(predict(name, feats, res["crop"]))
+        p = float(np.mean(self.probs))
+        drowsy = p >= 0.5
+        self.drowsy_since = (self.drowsy_since or now) if drowsy else None
+        eyes_closed = (feats["eye_blink_left"] + feats["eye_blink_right"]) / 2 > 0.55
+        self.closed_since = (self.closed_since or now) if eyes_closed else None
+        drowsy_for = now - self.drowsy_since if self.drowsy_since else 0.0
+        alarm = drowsy_for >= ALARM_SECONDS
+        color = (40, 40, 230) if drowsy else (60, 200, 60)
+        vis = draw(img, res["pts"], color)
+        cv2.rectangle(vis, (0, 0), (vis.shape[1], 40), (0, 0, 0), -1)
+        cv2.putText(vis, f"{LABELS[int(drowsy)]}  {p:.0%}  [{name}]", (10, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2, cv2.LINE_AA)
+        if alarm:
+            cv2.rectangle(vis, (0, 0), (vis.shape[1] - 1, vis.shape[0] - 1), (0, 0, 255), 12)
+            cv2.putText(vis, "WAKE UP!", (vis.shape[1] // 2 - 110, vis.shape[0] - 30), cv2.FONT_HERSHEY_DUPLEX, 1.5, (0, 0, 255), 3, cv2.LINE_AA)
+        with self.lock:
+            self.info = {"face": True, "p": p, "drowsy": drowsy, "alarm": alarm, "drowsy_for": drowsy_for,
+                         "closed_for": (now - self.closed_since) if self.closed_since else 0.0,
+                         "ear": (feats["ear_left"] + feats["ear_right"]) / 2, "mar": feats["mar"]}
+        return av.VideoFrame.from_ndarray(vis, format="bgr24")
+
+
+if page == "Live Camera (browser)":
+    from streamlit_webrtc import WebRtcMode, webrtc_streamer
+
+    st.header("Live Camera")
+    st.caption("Uses **your browser's camera**, so it also works when the app runs online. Press **START** and allow "
+               "camera access. Frames are analysed on the server and are not saved.")
+    if "browser_detector" not in st.session_state:
+        st.session_state.browser_detector = BrowserDetector()
+    det = st.session_state.browser_detector
+    with det.lock:
+        det.model_name = model_name
+    left, right = st.columns([3, 2])
+    with left:
+        ctx = webrtc_streamer(key="drowsiness", mode=WebRtcMode.SENDRECV, video_frame_callback=det.callback,
+                              rtc_configuration={"iceServers": ice_servers()},
+                              media_stream_constraints={"video": {"width": 640, "height": 480}, "audio": False},
+                              async_processing=True)
+        alarm_box, sound_box = st.empty(), st.empty()
+    with right:
+        status_box, prob_box = st.empty(), st.empty()
+        m1, m2 = st.columns(2)
+        ear_box, mar_box = m1.empty(), m2.empty()
+        m3, m4 = st.columns(2)
+        closed_box, drowsy_box = m3.empty(), m4.empty()
+    if not ctx.state.playing:
+        status_box.info("Press **START** under the video box to begin.")
+    last_beep = 0.0
+    while ctx.state.playing:
+        with det.lock:
+            info = dict(det.info)
+        if not info.get("face"):
+            status_box.markdown('<div class="status" style="background:#64748b">No face detected</div>', unsafe_allow_html=True)
+            alarm_box.empty()
+        else:
+            label, bg = (LABELS[1], "#dc2626") if info["drowsy"] else (LABELS[0], "#16a34a")
+            status_box.markdown(f'<div class="status" style="background:{bg}">{label}</div>', unsafe_allow_html=True)
+            prob_box.progress(info["p"], text=f"Drowsiness probability: {info['p']:.0%}")
+            ear_box.metric("Eye opening (EAR)", f"{info['ear']:.3f}")
+            mar_box.metric("Mouth opening (MAR)", f"{info['mar']:.3f}")
+            closed_box.metric("Eyes closed for", f"{info['closed_for']:.1f} s")
+            drowsy_box.metric("Drowsy for", f"{info['drowsy_for']:.1f} s")
+            if info["alarm"]:
+                alarm_box.markdown('<div class="alarm">⚠ WAKE UP! Drowsiness detected</div>', unsafe_allow_html=True)
+                if sound and time.time() - last_beep > 1.5:
+                    last_beep = time.time()
+                    sound_box.markdown(f'<audio autoplay src="data:audio/wav;base64,{beep_html()}"></audio><!--{last_beep}-->',
+                                       unsafe_allow_html=True)
+            else:
+                alarm_box.empty()
+        time.sleep(0.25)
+
+
+# ----------------------------------------------------------------------------- Laptop camera (OpenCV, local runs only)
+elif page == "Laptop Camera (local only)":
+    st.header("Laptop Camera")
+    st.caption("Opens the camera of the computer running this app with OpenCV. Use **Live Camera (browser)** when the app is online.")
     c1, c2 = st.columns([1, 3])
     cam_index = c1.number_input("Camera", 0, 5, 0, help="0 = built-in webcam")
     run = c2.toggle("▶ Start camera", key="run")

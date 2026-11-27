@@ -30,16 +30,40 @@ near-identical frames of the same person in both sets and give fake ~99 % accura
 Open `DrowsyNet_3Models.ipynb` in Colab, choose Runtime → Change runtime type → **T4 GPU**, then **Run all**.
 The CSV is read straight from this repository, and the face images are downloaded from Kaggle with `kagglehub`.
 
-## Run the live app (on your laptop, needs a webcam)
+## Online version (this branch: `online-deploy`)
+
+On this branch, the **Live Camera (browser)** page streams the viewer's own browser camera to the app with
+`streamlit-webrtc`, so the app works when it is hosted online. The `main` branch keeps the laptop-only version.
+
+### Deploy on Streamlit Community Cloud (free)
+1. Go to **https://share.streamlit.io** and sign in with GitHub.
+2. Click **Create app** → **Deploy a public app from GitHub**.
+3. Repository: `annyaaggarwal501-netizen/Driver-s-Drowsiness-Detector`, Branch: **`online-deploy`**,
+   Main file path: `app.py`.
+4. Optional: under **Advanced settings**, choose Python **3.12**.
+5. Click **Deploy** and wait about 5–10 minutes for the first build (it installs PyTorch, MediaPipe and OpenCV).
+6. Share the link, e.g. `https://<your-name>.streamlit.app`. Open it, go to **Live Camera (browser)**, press **START**
+   and allow camera access.
+
+`requirements.txt` (CPU-only PyTorch, headless OpenCV) and `packages.txt` (system libraries) are set up for the cloud.
+
+**If the video never connects** (some college or office networks block it), add a TURN relay server in the app's
+**Settings → Secrets** on Streamlit Cloud, for example from a free metered.ca or Twilio account:
+
+```toml
+ICE_SERVERS = '[{"urls": ["stun:stun.l.google.com:19302"]}, {"urls": ["turn:YOUR_TURN_HOST:443"], "username": "USER", "credential": "PASSWORD"}]'
+```
+
+### Run locally
 
 ```bash
 pip install -r requirements.txt
 streamlit run app.py
 ```
 
-It opens at http://localhost:8501. On the **Live Webcam** page:
+It opens at http://localhost:8501. On either camera page:
 1. Choose a model in the sidebar (Random Forest, KNN or CNN). You can switch while the camera is on.
-2. Press **Start camera**.
+2. Press **START** (browser camera) or **Start camera** (laptop camera).
 3. The app draws eye/mouth outlines and shows EAR, MAR and the drowsiness probability. If the model says Drowsy for
    1.5 seconds without a break, a **WAKE UP** alarm appears with a beep.
 

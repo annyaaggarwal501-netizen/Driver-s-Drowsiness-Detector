@@ -1,16 +1,12 @@
-# Streamlit app (app.py) — run on your laptop:  streamlit run app.py
+# Requirements for the ONLINE app (Streamlit Community Cloud).
+# CPU-only PyTorch keeps the install small enough for the free tier.
+--extra-index-url https://download.pytorch.org/whl/cpu
 streamlit
-opencv-python
+streamlit-webrtc
+opencv-python-headless
 mediapipe
 torch
-scikit-learn
+scikit-learn==1.6.1      # same version the models were trained with in Colab
 joblib
 numpy
 pandas
-
-# Notebooks (Google Colab already has most of these)
-matplotlib
-seaborn
-kagglehub
-xgboost
-tensorflow
