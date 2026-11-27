@@ -1,12 +1,11 @@
-# Requirements for the ONLINE app (Streamlit Community Cloud).
-# CPU-only PyTorch keeps the install small enough for the free tier.
---extra-index-url https://download.pytorch.org/whl/cpu
+# Requirements for the ONLINE app (Streamlit Community Cloud) — kept small so the app starts quickly.
+# - No PyTorch: the CNN runs from models/cnn_model.onnx with ONNX Runtime (same outputs).
+# - No separate OpenCV: MediaPipe already installs opencv-contrib-python.
 streamlit
 streamlit-webrtc
-opencv-python-headless
 mediapipe
-torch
-scikit-learn==1.6.1      # same version the models were trained with in Colab
+onnxruntime
+scikit-learn
 joblib
 numpy
 pandas

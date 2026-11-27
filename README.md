@@ -41,11 +41,17 @@ On this branch, the **Live Camera (browser)** page streams the viewer's own brow
 3. Repository: `annyaaggarwal501-netizen/Driver-s-Drowsiness-Detector`, Branch: **`online-deploy`**,
    Main file path: `app.py`.
 4. Optional: under **Advanced settings**, choose Python **3.12**.
-5. Click **Deploy** and wait about 5–10 minutes for the first build (it installs PyTorch, MediaPipe and OpenCV).
+5. Click **Deploy** and wait a few minutes for the first build (it installs MediaPipe, OpenCV and ONNX Runtime).
 6. Share the link, e.g. `https://<your-name>.streamlit.app`. Open it, go to **Live Camera (browser)**, press **START**
    and allow camera access.
 
-`requirements.txt` (CPU-only PyTorch, headless OpenCV) and `packages.txt` (system libraries) are set up for the cloud.
+`requirements.txt` and `packages.txt` (system libraries) are kept small for the cloud. The online app does not
+install PyTorch: the CNN trained in PyTorch is exported to `models/cnn_model.onnx` and run with ONNX Runtime, which
+gives the same predictions. OpenCV comes with MediaPipe.
+
+**Why the link is sometimes slow to open:** free Streamlit apps go to sleep when nobody uses them. The first visit
+after that restarts the app, which reinstalls the packages and loads the models (a few minutes). Open the link a few
+minutes before a demo.
 
 **If the video never connects** (some college or office networks block it), add a TURN relay server in the app's
 **Settings → Secrets** on Streamlit Cloud, for example from a free metered.ca or Twilio account:

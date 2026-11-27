@@ -24,8 +24,7 @@ import joblib
 import numpy as np
 import pandas as pd
 import streamlit as st
-import torch
-import torch.nn as nn
+import onnxruntime as ort
 
 MODELS = Path(__file__).parent / "models"
 LANDMARKER = MODELS / "face_landmarker.task"
@@ -53,22 +52,9 @@ SMOOTH_FRAMES = 10           # average the model output over the last 10 frames 
 TARGET_FPS = 10
 
 
-# ----------------------------------------------------------------------------- CNN (same as the notebook)
-class DrowsyCNN(nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.features = nn.Sequential(
-            nn.Conv2d(1, 16, 3, padding=1), nn.BatchNorm2d(16), nn.ReLU(), nn.MaxPool2d(2),
-            nn.Conv2d(16, 32, 3, padding=1), nn.BatchNorm2d(32), nn.ReLU(), nn.MaxPool2d(2),
-            nn.Conv2d(32, 64, 3, padding=1), nn.BatchNorm2d(64), nn.ReLU(), nn.MaxPool2d(2),
-        )
-        self.classifier = nn.Sequential(nn.Flatten(), nn.Linear(64 * 8 * 8, 64), nn.ReLU(), nn.Dropout(0.5), nn.Linear(64, 2))
-
-    def forward(self, x):
-        return self.classifier(self.features(x))
-
-
 # ----------------------------------------------------------------------------- loading (cached once)
+# The CNN trained in PyTorch (models/cnn_model.pt) is run online from models/cnn_model.onnx with ONNX Runtime:
+# identical outputs, but a much smaller install than PyTorch, so the online app starts faster.
 @st.cache_resource(show_spinner="Loading MediaPipe and the 3 models…")
 def load_everything():
     import mediapipe as mp
@@ -83,9 +69,7 @@ def load_everything():
         min_face_detection_confidence=0.3, min_face_presence_confidence=0.3,
         output_face_blendshapes=True, output_facial_transformation_matrixes=True)
     landmarker = vision.FaceLandmarker.create_from_options(options)
-    cnn = DrowsyCNN()
-    cnn.load_state_dict(torch.load(MODELS / "cnn_model.pt", map_location="cpu"))
-    cnn.eval()
+    cnn = ort.InferenceSession(str(MODELS / "cnn_model.onnx"), providers=["CPUExecutionProvider"])
     models = {"Random Forest": joblib.load(MODELS / "rf_model.pkl"),
               "KNN": joblib.load(MODELS / "knn_model.pkl"), "CNN": cnn}
     return mp, landmarker, models
@@ -180,9 +164,10 @@ def face_crop_gray(bgr, pts):
 def predict(model_name, feats, crop):
     """Probability that the driver is drowsy, from one of the three models."""
     if model_name == "CNN":
-        x = torch.tensor(crop, dtype=torch.float32)[None, None] / 255.0
-        with torch.no_grad():
-            return float(torch.softmax(MODEL_OBJECTS["CNN"](x), 1)[0, 1])
+        x = (crop.astype(np.float32) / 255.0)[None, None]
+        logits = MODEL_OBJECTS["CNN"].run(None, {"image": x})[0][0]
+        e = np.exp(logits - logits.max())
+        return float(e[1] / e.sum())                         # softmax probability of "Drowsy"
     row = pd.DataFrame([[feats[c] for c in FEATURES]], columns=FEATURES)
     return float(MODEL_OBJECTS[model_name].predict_proba(row)[0, 1])
 
