@@ -47,7 +47,7 @@ On this branch, the **Live Camera (browser)** page streams the viewer's own brow
 
 `requirements.txt` and `packages.txt` (system libraries) are kept small for the cloud. The online app does not
 install PyTorch: the CNN trained in PyTorch is exported to `models/cnn_model.onnx` and run with ONNX Runtime, which
-gives the same predictions. OpenCV comes with MediaPipe.
+gives the same predictions. The headless OpenCV build is used because the server has no graphics libraries.
 
 **Why the link is sometimes slow to open:** free Streamlit apps go to sleep when nobody uses them. The first visit
 after that restarts the app, which reinstalls the packages and loads the models (a few minutes). Open the link a few

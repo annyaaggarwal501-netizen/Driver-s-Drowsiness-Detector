@@ -1,9 +1,13 @@
 # Requirements for the ONLINE app (Streamlit Community Cloud) — kept small so the app starts quickly.
 # - No PyTorch: the CNN runs from models/cnn_model.onnx with ONNX Runtime (same outputs).
-# - No separate OpenCV: MediaPipe already installs opencv-contrib-python.
+# - opencv-python-headless is needed on the server: the desktop OpenCV that MediaPipe installs
+#   cannot load there (no graphics libraries).
+# - scikit-learn is not pinned, so a ready-made package exists for the server's Python version
+#   (pinning an old version forced a slow build from source).
 streamlit
 streamlit-webrtc
 mediapipe
+opencv-python-headless
 onnxruntime
 scikit-learn
 joblib
